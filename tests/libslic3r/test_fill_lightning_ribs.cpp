@@ -5,6 +5,7 @@
 #include <set>
 #include <vector>
 
+#include "libslic3r/ClipperUtils.hpp"
 #include "libslic3r/ExPolygon.hpp"
 #include "libslic3r/Fill/Lightning/Ribs.hpp"
 #include "libslic3r/libslic3r.h"
@@ -57,6 +58,23 @@ TEST_CASE("Ribs form a square grid at the rib spacing where the infill is wide",
     CHECK(ys == lattice);
 }
 
+TEST_CASE("Ribs tie together walls closer than one and a half rib spacings at the tie spacing", "[Fill][RibbedLightning]")
+{
+    // 21 mm across: wide enough for the rib grid, but every chord is a short tie between two walls.
+    const Polylines ribs = generate_ribs({ rectangle(-10.5, -10.5, 10.5, 10.5) }, rib_params(16., 8.));
+
+    std::set<coord_t> xs, ys;
+    for (const Polyline &rib : ribs) {
+        if (is_vertical(rib))
+            xs.insert(rib.first_point().x());
+        else
+            ys.insert(rib.first_point().y());
+    }
+    const std::set<coord_t> lattice { scaled<coord_t>(-8.), 0, scaled<coord_t>(8.) };
+    CHECK(xs == lattice);
+    CHECK(ys == lattice);
+}
+
 TEST_CASE("Ribs keep clear of the walls running alongside them", "[Fill][RibbedLightning]")
 {
     // The lattice lines at +-32 mm run 1 mm inside the edges, closer than a quarter of the rib spacing.
@@ -72,6 +90,19 @@ TEST_CASE("Ribs keep clear of the walls running alongside them", "[Fill][RibbedL
     const std::set<coord_t> lattice { scaled<coord_t>(-16.), 0, scaled<coord_t>(16.) };
     CHECK(xs == lattice);
     CHECK(ys == lattice);
+}
+
+TEST_CASE("Ribs run on through a narrow neck between wide parts", "[Fill][RibbedLightning]")
+{
+    // Two blocks 32 mm wide joined by a neck 6 mm wide, all centered on the lattice line y = 0. The
+    // rib has no room beside it in the neck, where its middle lies, but has along most of its length.
+    const ExPolygons area = union_ex(ExPolygons{ rectangle(-40., -12., -8., 12.), rectangle(8., -12., 40., 12.), rectangle(-9., -3., 9., 3.) });
+    const Polylines  ribs = generate_ribs(area, rib_params(16., 8.));
+
+    const bool through_neck = std::any_of(ribs.begin(), ribs.end(), [](const Polyline &rib) {
+        return is_horizontal(rib) && rib.first_point().y() == 0 && std::abs(unscaled(rib.length()) - 80.) < 0.01;
+    });
+    CHECK(through_neck);
 }
 
 TEST_CASE("Ribs cross a narrow wall at the tie spacing and leave out the lines along it", "[Fill][RibbedLightning]")

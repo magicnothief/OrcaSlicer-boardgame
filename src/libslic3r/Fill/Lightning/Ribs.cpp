@@ -43,6 +43,21 @@ static coord_t overlap(const Interval &chord, const std::vector<Interval> &inter
     return length;
 }
 
+// Where both sorted lists of intervals overlap.
+static std::vector<Interval> intersect(const std::vector<Interval> &a, const std::vector<Interval> &b)
+{
+    std::vector<Interval> out;
+    for (size_t i = 0, j = 0; i < a.size() && j < b.size();) {
+        if (const coord_t lo = std::max(a[i].first, b[j].first), hi = std::min(a[i].second, b[j].second); lo < hi)
+            out.emplace_back(lo, hi);
+        if (a[i].second < b[j].second)
+            ++ i;
+        else
+            ++ j;
+    }
+    return out;
+}
+
 static void transpose(Polygons &polygons)
 {
     for (Polygon &polygon : polygons)
@@ -61,10 +76,12 @@ Polylines generate_ribs(const ExPolygons &area, const RibParams &params)
     const coord_t rib_spacing    = tie_spacing * k;
     // A chord crossing a wall at 45 degrees is sqrt(2) times as long as the wall is wide. Anything much
     // longer runs along the wall rather than across it, and adds nothing to what its faces already do.
+    // Where the infill is wide, the chords are longer too, and only the ribs are printed.
     const coord_t max_tie_length = 3 * rib_spacing / 2;
     // A chord must have infill on both sides. One running along an edge of the area would be printed over the wall.
     const coord_t side_offset    = std::max(coord_t(SCALED_EPSILON), params.min_length / 4);
-    // A rib close to a wall running alongside it would only thicken that wall.
+    // A rib close to a wall running alongside it would only thicken that wall. It may pass the narrow
+    // necks between pockets, but needs room on both sides along most of its length.
     const coord_t rib_clearance  = rib_spacing / 4;
 
     // Work in a frame where the lattice lines are vertical (x = i * tie_spacing) and, transposed, horizontal.
@@ -94,18 +111,18 @@ Polylines generate_ribs(const ExPolygons &area, const RibParams &params)
             const std::vector<Interval> left       = chords_at(polygons, c - side_offset);
             const std::vector<Interval> right      = chords_at(polygons, c + side_offset);
             const std::vector<Interval> wide_parts = chords_at(wide, c);
-            const std::vector<Interval> rib_left   = is_rib ? chords_at(polygons, c - rib_clearance) : std::vector<Interval>();
-            const std::vector<Interval> rib_right  = is_rib ? chords_at(polygons, c + rib_clearance) : std::vector<Interval>();
+            // Where a rib would have room on both sides.
+            const std::vector<Interval> rib_room   = is_rib ? intersect(chords_at(polygons, c - rib_clearance), chords_at(polygons, c + rib_clearance)) :
+                                                              std::vector<Interval>();
             for (const Interval &chord : chords) {
                 const coord_t length = chord.second - chord.first;
                 const coord_t middle = chord.first + length / 2;
                 if (length < params.min_length || ! contains(left, middle) || ! contains(right, middle))
                     continue;
-                const coord_t in_wide = overlap(chord, wide_parts);
-                // A rib crosses a wide part and runs on to the walls on either side of it. A tie crosses
-                // a narrow part from one wall to the other.
-                const bool rib = is_rib && in_wide >= std::min(rib_spacing / 2, length / 2) && contains(rib_left, middle) && contains(rib_right, middle);
-                const bool tie = in_wide <= params.min_length && length <= max_tie_length;
+                // A rib crosses a wide part and runs on to the walls on either side of it. A tie is any short
+                // chord from one wall to another: across a narrow wall, or between pockets close to each other.
+                const bool rib = is_rib && overlap(chord, wide_parts) >= std::min(rib_spacing / 2, length / 2) && overlap(chord, rib_room) >= length / 2;
+                const bool tie = length <= max_tie_length;
                 if (rib || tie)
                     ribs.emplace_back(family == 0 ? Polyline(Point(c, chord.first), Point(c, chord.second)) :
                                                     Polyline(Point(chord.first, c), Point(chord.second, c)));

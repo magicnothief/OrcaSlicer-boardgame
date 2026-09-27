@@ -13,8 +13,9 @@ struct RibParams
 {
     // Lattice spacing where the infill is wide enough to hold a whole cell: the ribs form a grid.
     coord_t rib_spacing { 0 };
-    // Lattice spacing where the infill is narrower than that, such as the walls between the pockets
-    // of an insert: only the chords crossing the wall are kept, tying its two faces together.
+    // Lattice spacing of the ties, the chords short enough to tie two walls together: across the walls
+    // between the pockets of an insert, or between pockets close to each other. The long chords of a
+    // lattice line running along a wall are left out.
     // Rounded so that the rib spacing is a whole multiple of it, keeping the ribs on the finer lattice.
     coord_t tie_spacing { 0 };
     // Direction of the first family of lines, in radians. The second family is perpendicular to it.
