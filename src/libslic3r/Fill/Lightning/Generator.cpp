@@ -2,6 +2,7 @@
 //CuraEngine is released under the terms of the AGPLv3 or higher.
 
 #include "Generator.hpp"
+#include "Ribs.hpp"
 #include "TreeNode.hpp"
 
 #include "../../ClipperUtils.hpp"
@@ -9,6 +10,8 @@
 #include "../../Print.hpp"
 
 #include "ExPolygon.hpp"
+
+#include <tbb/parallel_for.h>
 
 /* Possible future tasks/optimizations,etc.:
  * - Improve connecting heuristic to favor connecting to shorter trees
@@ -96,8 +99,18 @@ Generator::Generator(const PrintObject &print_object, const std::function<void()
     m_prune_length                                    = coord_t(layer_thickness * std::tan(lightning_infill_prune_angle));
     m_straightening_max_distance                      = coord_t(layer_thickness * std::tan(lightning_infill_straightening_angle));
 
-    generateInitialInternalOverhangs(print_object, throw_on_cancel_callback);
-    generateTrees(print_object, throw_on_cancel_callback);
+    std::vector<Polygons> infill_outlines(print_object.layers().size());
+    for (int layer_id = int(print_object.layers().size()) - 1; layer_id >= 0; layer_id--) {
+        throw_on_cancel_callback();
+        for (const LayerRegion *layerm : print_object.get_layer(layer_id)->regions())
+            for (const Surface &surface : layerm->fill_surfaces.surfaces)
+                if (surface.surface_type == stInternal || surface.surface_type == stInternalVoid)
+                    append(infill_outlines[layer_id], to_polygons(surface.expolygon));
+    }
+
+    generateRibs(print_object, infill_outlines, throw_on_cancel_callback);
+    generateInitialInternalOverhangs(infill_outlines, throw_on_cancel_callback);
+    generateTrees(infill_outlines, throw_on_cancel_callback);
 }
 
 Generator::Generator(PrintObject* m_object, std::vector<Polygons>& contours, std::vector<Polygons>& overhangs, const std::function<void()> &throw_on_cancel_callback, float density)
@@ -148,26 +161,60 @@ Generator::Generator(PrintObject* m_object, std::vector<Polygons>& contours, std
     //}
 }
 
-void Generator::generateInitialInternalOverhangs(const PrintObject &print_object, const std::function<void()> &throw_on_cancel_callback)
+void Generator::generateInitialInternalOverhangs(const std::vector<Polygons> &infill_outlines, const std::function<void()> &throw_on_cancel_callback)
 {
-    m_overhang_per_layer.resize(print_object.layers().size());
+    m_overhang_per_layer.resize(infill_outlines.size());
 
-    Polygons infill_area_above;
     //Iterate from top to bottom, to subtract the overhang areas above from the overhang areas on the layer below, to get only overhang in the top layer where it is overhanging.
-    for (int layer_nr = int(print_object.layers().size()) - 1; layer_nr >= 0; --layer_nr) {
+    for (int layer_nr = int(infill_outlines.size()) - 1; layer_nr >= 0; --layer_nr) {
         throw_on_cancel_callback();
-        Polygons infill_area_here;
-        for (const LayerRegion* layerm : print_object.get_layer(layer_nr)->regions())
-            for (const Surface& surface : layerm->fill_surfaces.surfaces)
-                if (surface.surface_type == stInternal || surface.surface_type == stInternalVoid)
-                    append(infill_area_here, to_polygons(surface.expolygon));
+        static const Polygons none;
+        const Polygons &infill_area_above = layer_nr + 1 < int(infill_outlines.size()) ? infill_outlines[layer_nr + 1] : none;
 
         //Remove the part of the infill area that is already supported by the walls.
-        Polygons overhang = diff(offset(infill_area_here, -float(m_wall_supporting_radius)), infill_area_above);
-
-        m_overhang_per_layer[layer_nr] = overhang;
-        infill_area_above = std::move(infill_area_here);
+        m_overhang_per_layer[layer_nr] = diff(offset(infill_outlines[layer_nr], -float(m_wall_supporting_radius)), infill_area_above);
     }
+}
+
+void Generator::generateRibs(const PrintObject &print_object, std::vector<Polygons> &infill_outlines, const std::function<void()> &throw_on_cancel_callback)
+{
+    const PrintRegionConfig *config = nullptr;
+    for (size_t region_id = 0; region_id < print_object.num_printing_regions() && ! config; ++ region_id)
+        if (const PrintRegionConfig &region_config = print_object.printing_region(region_id).config(); region_config.sparse_infill_pattern == ipRibbedLightning)
+            config = &region_config;
+    if (! config)
+        return;
+
+    RibParams params;
+    params.rib_spacing = scaled<coord_t>(config->ribbed_lightning_rib_spacing.value);
+    params.tie_spacing = scaled<coord_t>(config->ribbed_lightning_tie_spacing.value);
+    // The ribs run along the X and Y axes, which is how the pockets of an insert are laid out.
+    if (config->align_infill_direction_to_model) {
+        const auto m = print_object.trafo().matrix();
+        params.angle = std::atan2(double(m(1, 0)), double(m(0, 0)));
+    }
+    params.min_length = coord_t(2. * m_infill_extrusion_width);
+    // The trees end on the edge of a rib as they would on a wall.
+    const float rib_half_width = 0.5f * m_infill_extrusion_width * float(std::max(1, config->fill_multiline.value));
+
+    m_ribs_per_layer.assign(infill_outlines.size(), Polylines());
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, infill_outlines.size()), [&](const tbb::blocked_range<size_t> &range) {
+        for (size_t layer_id = range.begin(); layer_id < range.end(); ++ layer_id) {
+            throw_on_cancel_callback();
+            ExPolygons area;
+            for (const LayerRegion *layerm : print_object.get_layer(int(layer_id))->regions())
+                if (layerm->region().config().sparse_infill_pattern == ipRibbedLightning)
+                    for (const Surface &surface : layerm->fill_surfaces.surfaces)
+                        if (surface.surface_type == stInternal)
+                            area.emplace_back(surface.expolygon);
+            if (area.empty())
+                continue;
+            Polylines &ribs = m_ribs_per_layer[layer_id];
+            ribs = generate_ribs(union_ex(area), params);
+            if (! ribs.empty())
+                infill_outlines[layer_id] = diff(infill_outlines[layer_id], offset(ribs, rib_half_width));
+        }
+    });
 }
 
 const Layer& Generator::getTreesForLayer(const size_t& layer_id) const
@@ -176,24 +223,20 @@ const Layer& Generator::getTreesForLayer(const size_t& layer_id) const
     return m_lightning_layers[layer_id];
 }
 
-void Generator::generateTrees(const PrintObject &print_object, const std::function<void()> &throw_on_cancel_callback)
+const Polylines& Generator::getRibsForLayer(size_t layer_id) const
+{
+    static const Polylines no_ribs;
+    return layer_id < m_ribs_per_layer.size() ? m_ribs_per_layer[layer_id] : no_ribs;
+}
+
+void Generator::generateTrees(const std::vector<Polygons> &infill_outlines, const std::function<void()> &throw_on_cancel_callback)
 {
     const auto _locator_cell_size = locator_cell_size();
-    m_lightning_layers.resize(print_object.layers().size());
-    bboxs.resize(print_object.layers().size());
-    std::vector<Polygons> infill_outlines(print_object.layers().size(), Polygons());
-
-    // For-each layer from top to bottom:
-    for (int layer_id = int(print_object.layers().size()) - 1; layer_id >= 0; layer_id--) {
-        throw_on_cancel_callback();
-        for (const LayerRegion *layerm : print_object.get_layer(layer_id)->regions())
-            for (const Surface &surface : layerm->fill_surfaces.surfaces)
-                if (surface.surface_type == stInternal || surface.surface_type == stInternalVoid)
-                    append(infill_outlines[layer_id], to_polygons(surface.expolygon));
-    }
+    m_lightning_layers.resize(infill_outlines.size());
+    bboxs.resize(infill_outlines.size());
 
     // For various operations its beneficial to quickly locate nearby features on the polygon:
-    const size_t top_layer_id = print_object.layers().size() - 1;
+    const size_t top_layer_id = infill_outlines.size() - 1;
     EdgeGrid::Grid outlines_locator(get_extents(infill_outlines[top_layer_id]).inflated(SCALED_EPSILON));
     outlines_locator.create(infill_outlines[top_layer_id], _locator_cell_size);
 

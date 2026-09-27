@@ -19,10 +19,13 @@ GeneratorPtr build_generator(const PrintObject &print_object, const std::functio
 class Filler : public Slic3r::Fill
 {
 public:
+    // Orca: A ribbed filler prints the straight ribs of Ribbed Lightning infill with the branches.
+    explicit Filler(bool ribbed = false) : ribbed(ribbed) {}
     ~Filler() override = default;
     bool is_self_crossing() override { return false; }
 
     Generator   *generator { nullptr };
+    bool         ribbed { false };
 protected:
     Fill* clone() const override { return new Filler(*this); }
 

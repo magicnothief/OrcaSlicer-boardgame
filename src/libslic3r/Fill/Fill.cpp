@@ -1329,7 +1329,7 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
             assert(fill_concentric != nullptr);
             fill_concentric->print_config = &this->object()->print()->config();
             fill_concentric->print_object_config = &this->object()->config();
-        } else if (surface_fill.params.pattern == ipLightning)
+        } else if (is_lightning_infill_pattern(surface_fill.params.pattern))
             dynamic_cast<FillLightning::Filler*>(f.get())->generator = lightning_generator;
         // calculate flow spacing for infill pattern generation
         bool using_internal_flow = ! surface_fill.surface.is_solid() && ! surface_fill.params.bridge;
@@ -1494,6 +1494,7 @@ Polylines Layer::generate_sparse_infill_polylines_for_anchoring(FillAdaptive::Oc
         case ipSupportBase: continue; break;
         case ipConcentricInternal: continue; break;
         case ipLightning:
+        case ipRibbedLightning:
 		case ipAdaptiveCubic:
         case ipSupportCubic:
         case ipRectilinear:
@@ -1537,7 +1538,7 @@ Polylines Layer::generate_sparse_infill_polylines_for_anchoring(FillAdaptive::Oc
         f->print_config        = &this->object()->print()->config();
         f->print_object_config = &this->object()->config();
 
-        if (surface_fill.params.pattern == ipLightning)
+        if (is_lightning_infill_pattern(surface_fill.params.pattern))
             dynamic_cast<FillLightning::Filler *>(f.get())->generator = lightning_generator;
 
         // calculate flow spacing for infill pattern generation

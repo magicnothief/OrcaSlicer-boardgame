@@ -184,6 +184,8 @@ set(lisbslic3r_sources
     Fill/Lightning/Generator.hpp
     Fill/Lightning/Layer.cpp
     Fill/Lightning/Layer.hpp
+    Fill/Lightning/Ribs.cpp
+    Fill/Lightning/Ribs.hpp
     Fill/Lightning/TreeNode.cpp
     Fill/Lightning/TreeNode.hpp
     FilamentMixer.cpp

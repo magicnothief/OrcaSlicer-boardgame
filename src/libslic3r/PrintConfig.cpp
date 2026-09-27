@@ -267,6 +267,7 @@ static t_config_enum_values s_keys_map_InfillPattern {
     { "quartercubic", ipQuarterCubic },
     { "supportcubic", ipSupportCubic },
     { "lightning", ipLightning },
+    { "ribbedlightning", ipRibbedLightning },
     { "honeycomb", ipHoneycomb },
     { "3dhoneycomb", ip3DHoneycomb },
     { "lateral-honeycomb", ipLateralHoneycomb },
@@ -3498,6 +3499,7 @@ void PrintConfigDef::init_fff_params()
     def->enum_values.push_back("quartercubic");
     def->enum_values.push_back("supportcubic");
     def->enum_values.push_back("lightning");
+    def->enum_values.push_back("ribbedlightning");
     def->enum_values.push_back("honeycomb");
     def->enum_values.push_back("3dhoneycomb");
     def->enum_values.push_back("lateral-honeycomb");
@@ -3524,6 +3526,7 @@ void PrintConfigDef::init_fff_params()
     def->enum_labels.push_back(L("Quarter Cubic"));
     def->enum_labels.push_back(L("Support Cubic"));
     def->enum_labels.push_back(L("Lightning"));
+    def->enum_labels.push_back(L("Ribbed Lightning"));
     def->enum_labels.push_back(L("Honeycomb"));
     def->enum_labels.push_back(L("3D Honeycomb"));
     def->enum_labels.push_back(L("Lateral Honeycomb"));
@@ -4588,6 +4591,29 @@ void PrintConfigDef::init_fff_params()
     def->max      = 85;
     def->mode     = comExpert;
     def->set_default_value(new ConfigOptionFloat(45));
+
+    def           = this->add("ribbed_lightning_rib_spacing", coFloat);
+    def->label    = L("Rib spacing");
+    def->category = L("Strength");
+    def->tooltip  = L("Distance between the ribs of Ribbed Lightning infill. The ribs are straight lines along the X and Y axes, "
+                      "or along the axes of the model with \"Align directions to model\". They are printed at the same place on "
+                      "every layer, so they stack into vertical plates that tie the top surfaces to the bottom ones. Where the "
+                      "infill is at least this wide, they form a square grid.");
+    def->sidetext = L("mm");	// millimeters, CIS languages need translation
+    def->min      = 2;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(16));
+
+    def           = this->add("ribbed_lightning_tie_spacing", coFloat);
+    def->label    = L("Wall tie spacing");
+    def->category = L("Strength");
+    def->tooltip  = L("Distance between the ribs crossing the parts of Ribbed Lightning infill that are narrower than the rib "
+                      "spacing, such as the thick walls between the pockets of a board game insert. They tie the two faces of the "
+                      "wall together. Rounded so that the rib spacing is a whole multiple of it.");
+    def->sidetext = L("mm");	// millimeters, CIS languages need translation
+    def->min      = 1;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(8));
 
     auto def_infill_anchor_min = def = this->add("infill_anchor", coFloatOrPercent);
     def->label = L("Sparse infill anchor length");

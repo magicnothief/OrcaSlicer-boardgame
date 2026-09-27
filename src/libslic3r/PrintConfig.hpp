@@ -115,6 +115,8 @@ enum InfillPattern : int {
     ipCrossHatch, ipTpmsD, ipTpmsFK, ipGyroid,
     ipConcentric, ipSpiralInset, ipHilbertCurve, ipArchimedeanChords, ipOctagramSpiral,
     ipSupportBase, ipConcentricInternal,
+    // Orca: Appended so that the values of the other patterns stay the same.
+    ipRibbedLightning,
     ipCount,
 };
 
@@ -155,6 +157,7 @@ inline bool is_smoothable_infill_pattern(InfillPattern pattern, int multiline = 
     case ipHilbertCurve:
     case ipOctagramSpiral:
     case ipLightning:
+    case ipRibbedLightning:
     case ipHoneycomb:
     case ip3DHoneycomb:
     case ipConcentric:
@@ -168,6 +171,12 @@ inline bool is_smoothable_infill_pattern(InfillPattern pattern, int multiline = 
     default:
         return false;
     }
+}
+
+// Orca: Infill patterns grown by the Lightning generator.
+inline bool is_lightning_infill_pattern(InfillPattern pattern)
+{
+    return pattern == ipLightning || pattern == ipRibbedLightning;
 }
 
 enum class IroningType {
@@ -1304,6 +1313,8 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloat,                lightning_overhang_angle))
     ((ConfigOptionFloat,                lightning_prune_angle))
     ((ConfigOptionFloat,                lightning_straightening_angle))
+    ((ConfigOptionFloat,                ribbed_lightning_rib_spacing))
+    ((ConfigOptionFloat,                ribbed_lightning_tie_spacing))
     ((ConfigOptionBool,                 align_infill_direction_to_model))
     ((ConfigOptionEnum<CenterOfSurfacePattern>, center_of_surface_pattern))
     ((ConfigOptionBool,                 separated_infills))

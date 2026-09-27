@@ -31,6 +31,10 @@ void Filler::_fill_surface_single(
     const double max_reach      = 0.5 * (params.multiline > 1 ? branch_width : branch_spacing);
     smooth_polylines_corners(fill_lines, params.smooth_factor, scaled<double>(params.resolution), max_reach);
 
+    // Orca: Ribbed Lightning prints the straight ribs the branches were grown to end on.
+    if (this->ribbed)
+        append(fill_lines, intersection_pl(generator->getRibsForLayer(this->layer_id), expolygon));
+
     // Apply multiline offset if needed
     multiline_fill(fill_lines, params, spacing);
 

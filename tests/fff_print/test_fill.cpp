@@ -17,6 +17,7 @@
 #include "libslic3r/Geometry.hpp"
 #include "libslic3r/IntersectionPoints.hpp"
 #include "libslic3r/Layer.hpp"
+#include "libslic3r/MeshBoolean.hpp"
 #include "libslic3r/Print.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/SVG.hpp"
@@ -1039,6 +1040,21 @@ struct SparseInfillShape {
     uint64_t sequence { 14695981039346656037ull };
 };
 
+static void for_each_fill_path(const Layer &layer, const std::function<void(const ExtrusionPath &)> &visit)
+{
+    for (const LayerRegion *region : layer.regions())
+        for (const ExtrusionEntity *entity : region->fills.flatten().entities) {
+            if (auto *path = dynamic_cast<const ExtrusionPath *>(entity))
+                visit(*path);
+            else if (auto *multi = dynamic_cast<const ExtrusionMultiPath *>(entity))
+                for (const ExtrusionPath &p : multi->paths)
+                    visit(p);
+            else if (auto *loop = dynamic_cast<const ExtrusionLoop *>(entity))
+                for (const ExtrusionPath &p : loop->paths)
+                    visit(p);
+        }
+}
+
 static SparseInfillShape sparse_infill_shape(const Print &print)
 {
     SparseInfillShape shape;
@@ -1064,17 +1080,7 @@ static SparseInfillShape sparse_infill_shape(const Print &print)
     };
 
     for (const Layer *layer : print.objects().front()->layers())
-        for (const LayerRegion *region : layer->regions())
-            for (const ExtrusionEntity *entity : region->fills.flatten().entities) {
-                if (auto *path = dynamic_cast<const ExtrusionPath *>(entity))
-                    account(*path);
-                else if (auto *multi = dynamic_cast<const ExtrusionMultiPath *>(entity))
-                    for (const ExtrusionPath &p : multi->paths)
-                        account(p);
-                else if (auto *loop = dynamic_cast<const ExtrusionLoop *>(entity))
-                    for (const ExtrusionPath &p : loop->paths)
-                        account(p);
-            }
+        for_each_fill_path(*layer, account);
     return shape;
 }
 
@@ -1126,6 +1132,146 @@ TEST_CASE("Lightning infill rounds the turns of its branches with the smooth fac
     REQUIRE(smooth.point_count > sharp.point_count);
     REQUIRE(smooth.sharp_turns < sharp.sharp_turns);
     REQUIRE(smooth.length < sharp.length);
+}
+
+// A board game insert: a 100 x 70 x 24 mm block with a 2 x 2 grid of pockets 18 mm deep, on a 6 mm
+// floor, between walls 8 mm thick.
+static TriangleMesh insert_block()
+{
+    TriangleMesh block = make_cube(100., 70., 24.);
+    for (const double x : {8., 54.})
+        for (const double y : {8., 39.}) {
+            TriangleMesh pocket = make_cube(38., 23., 20.);
+            pocket.translate(float(x), float(y), 6.f);
+            MeshBoolean::cgal::minus(block, pocket);
+        }
+    return block;
+}
+
+static void slice_insert_block(Print &print, const std::string &pattern, const std::string &density = "15%")
+{
+    Slic3r::Test::init_and_process_print({insert_block()}, print,
+                                        {{"sparse_infill_pattern", pattern},
+                                         {"sparse_infill_density", density},
+                                         {"ribbed_lightning_rib_spacing", 16.},
+                                         {"ribbed_lightning_tie_spacing", 8.},
+                                         {"wall_loops", 2},
+                                         {"top_shell_layers", 4},
+                                         {"bottom_shell_layers", 3},
+                                         {"layer_height", 0.2}});
+}
+
+struct LayerInfill {
+    double print_z;
+    // Length of the sparse infill of the layer, in mm.
+    double length;
+    // The part of it lying on the lines x = i * spacing and y = i * spacing of the object.
+    double on_lattice;
+};
+
+static std::vector<LayerInfill> sparse_infill_per_layer(const Print &print, double spacing)
+{
+    const double lattice   = scaled<double>(spacing);
+    const double tolerance = scaled<double>(0.005);
+    auto on_lattice = [&](coord_t a, coord_t b) {
+        return std::abs(double(a - b)) < tolerance && std::abs(a - std::round(a / lattice) * lattice) < tolerance;
+    };
+    std::vector<LayerInfill> out;
+    for (const Layer *layer : print.objects().front()->layers()) {
+        LayerInfill infill { layer->print_z, 0., 0. };
+        for_each_fill_path(*layer, [&](const ExtrusionPath &path) {
+            if (!sparse_role(path.role()))
+                return;
+            const Points3 &pts = path.polyline.points;
+            for (size_t i = 1; i < pts.size(); ++i) {
+                const double length = unscaled((pts[i] - pts[i - 1]).head<2>().cast<double>().norm());
+                infill.length += length;
+                if (on_lattice(pts[i - 1].x(), pts[i].x()) || on_lattice(pts[i - 1].y(), pts[i].y()))
+                    infill.on_lattice += length;
+            }
+        });
+        out.push_back(infill);
+    }
+    return out;
+}
+
+TEST_CASE("Ribbed Lightning ties together the faces of pocket walls that Lightning leaves hollow", "[Fill][RibbedLightning]")
+{
+    // Halfway up the walls between the pockets, 12 mm below their tops and above the pocket floors.
+    auto infill_at_12mm = [](const std::string &pattern) {
+        Print print;
+        slice_insert_block(print, pattern);
+        for (const LayerInfill &infill : sparse_infill_per_layer(print, 8.))
+            if (std::abs(infill.print_z - 12.) < 0.01)
+                return infill;
+        FAIL("no layer at 12 mm");
+        return LayerInfill {};
+    };
+
+    // Nothing above needs holding up, so Lightning prints nothing there.
+    CHECK_THAT(infill_at_12mm("lightning").length, Catch::Matchers::WithinAbs(0., 1e-6));
+    // Ribbed Lightning crosses the walls with ties on the 8 mm lattice.
+    CHECK(infill_at_12mm("ribbedlightning").on_lattice > 0.);
+}
+
+TEST_CASE("Ribbed Lightning prints its ribs in the same place on every layer", "[Fill][RibbedLightning]")
+{
+    Print print;
+    slice_insert_block(print, "ribbedlightning");
+    const std::vector<LayerInfill> layers = sparse_infill_per_layer(print, 8.);
+
+    // In the floor under the pockets the ribs form a grid, and above it they cross the walls between
+    // the pockets. Away from the top surfaces, each part is the same from layer to layer, and so are the ribs.
+    for (const auto [bottom, top] : {std::make_pair(1.5, 4.), std::make_pair(8., 16.)}) {
+        std::vector<double> lengths;
+        for (const LayerInfill &infill : layers)
+            if (infill.print_z > bottom && infill.print_z < top)
+                lengths.push_back(infill.on_lattice);
+        REQUIRE(lengths.size() > 5);
+        REQUIRE(lengths.front() > 0.);
+        for (const double length : lengths)
+            CHECK_THAT(length, Catch::Matchers::WithinRel(lengths.front(), 0.01));
+    }
+}
+
+TEST_CASE("Ribbed Lightning holds up the pocket floors with branches", "[Fill][RibbedLightning]")
+{
+    Print print;
+    slice_insert_block(print, "ribbedlightning");
+
+    // The pocket floors are 4 layers of 0.2 mm at the top of the 6 mm floor. The sparse layer right
+    // below them grows branches from the ribs, which do not lie on the lattice.
+    double branches = 0.;
+    for (const LayerInfill &infill : sparse_infill_per_layer(print, 8.))
+        if (std::abs(infill.print_z - 5.2) < 0.01)
+            branches = infill.length - infill.on_lattice;
+    CHECK(branches > 0.);
+}
+
+TEST_CASE("Ribbed Lightning prints less sparse infill than Grid at the same density", "[Fill][RibbedLightning]")
+{
+    auto sparse_length = [](const std::string &pattern) {
+        Print print;
+        slice_insert_block(print, pattern);
+        return sparse_infill_shape(print).length;
+    };
+    CHECK(sparse_length("ribbedlightning") < sparse_length("grid"));
+}
+
+TEST_CASE("Ribbed Lightning slices the same model the same way twice", "[Fill][RibbedLightning][Regression]")
+{
+    // The ribs of the layers are placed in parallel, and must not depend on the order they are placed in.
+    auto shape = [] {
+        Print print;
+        slice_insert_block(print, "ribbedlightning");
+        return sparse_infill_shape(print);
+    };
+
+    const SparseInfillShape first  = shape();
+    const SparseInfillShape second = shape();
+
+    REQUIRE(first.path_count > 0);
+    REQUIRE(second.sequence == first.sequence);
 }
 
 TEST_CASE("Concentric infill rounds its loops with the smooth factor", "[Fill]")

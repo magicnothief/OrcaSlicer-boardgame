@@ -1110,7 +1110,7 @@ FillLightning::GeneratorPtr PrintObject::prepare_lightning_infill_data()
 {
     bool has_lightning_infill = false;
     for (size_t region_id = 0; region_id < this->num_printing_regions(); ++region_id)
-        if (const PrintRegionConfig& config = this->printing_region(region_id).config(); config.sparse_infill_density > 0 && config.sparse_infill_pattern == ipLightning) {
+        if (const PrintRegionConfig& config = this->printing_region(region_id).config(); config.sparse_infill_density > 0 && is_lightning_infill_pattern(config.sparse_infill_pattern)) {
             has_lightning_infill = true;
             break;
         }
@@ -1449,6 +1449,8 @@ bool PrintObject::invalidate_state_by_config_options(
                    || opt_key == "lightning_overhang_angle"
                    || opt_key == "lightning_prune_angle"
                    || opt_key == "lightning_straightening_angle"
+                   || opt_key == "ribbed_lightning_rib_spacing"
+                   || opt_key == "ribbed_lightning_tie_spacing"
                    || opt_key == "skeleton_infill_density"
                    || opt_key == "skin_infill_density"
                    || opt_key == "infill_lock_depth"
@@ -2689,7 +2691,7 @@ void PrintObject::bridge_over_infill()
     // Detect use of lightning infill. Moved earlier in the function to pass to the gather and filter surfaces threads.
     bool has_lightning_infill = false;
     for (size_t i = 0; i < this->num_printing_regions(); i++) {
-        if (this->printing_region(i).config().sparse_infill_pattern == ipLightning) {
+        if (is_lightning_infill_pattern(this->printing_region(i).config().sparse_infill_pattern)) {
             has_lightning_infill = true;
             break;
         }
@@ -2845,7 +2847,7 @@ void PrintObject::bridge_over_infill()
                 if (lower_layer == nullptr)
                     continue;
                 for (const LayerRegion *region : lower_layer->regions()) {
-                    if (region->region().config().sparse_infill_pattern == ipLightning
+                    if (is_lightning_infill_pattern(region->region().config().sparse_infill_pattern)
                         && ! region->fill_surfaces.filter_by_type(stInternal).empty()) {
                         needs_lightning_expansion[lidx] = 1;
                         break;
@@ -3382,7 +3384,7 @@ void PrintObject::bridge_over_infill()
                     expansion_area.insert(expansion_area.end(), internal_polys.begin(), internal_polys.end());
                     Polygons fill_polys = to_polygons(region->fill_expolygons);
                     total_fill_area.insert(total_fill_area.end(), fill_polys.begin(), fill_polys.end());
-                    if (region->region().config().sparse_infill_pattern == ipLightning) {
+                    if (is_lightning_infill_pattern(region->region().config().sparse_infill_pattern)) {
                         Polygons l = to_polygons(region->fill_surfaces.filter_by_type(stInternal));
                         lightning_area.insert(lightning_area.end(), l.begin(), l.end());
                     }
