@@ -1224,7 +1224,7 @@ TEST_CASE("Ribbed Lightning prints its ribs in the same place on every layer", "
 
     // In the floor under the pockets the ribs form a grid, and above it they cross the walls between
     // the pockets. Away from the top surfaces, each part is the same from layer to layer, and so are the ribs.
-    for (const auto [bottom, top] : {std::make_pair(1.5, 4.), std::make_pair(8., 16.)}) {
+    for (const auto &[bottom, top] : {std::make_pair(1.5, 4.), std::make_pair(8., 16.)}) {
         std::vector<double> lengths;
         for (const LayerInfill &infill : layers)
             if (infill.print_z > bottom && infill.print_z < top)
