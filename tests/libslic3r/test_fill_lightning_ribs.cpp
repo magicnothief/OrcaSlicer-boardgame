@@ -57,6 +57,23 @@ TEST_CASE("Ribs form a square grid at the rib spacing where the infill is wide",
     CHECK(ys == lattice);
 }
 
+TEST_CASE("Ribs keep clear of the walls running alongside them", "[Fill][RibbedLightning]")
+{
+    // The lattice lines at +-32 mm run 1 mm inside the edges, closer than a quarter of the rib spacing.
+    const Polylines ribs = generate_ribs({ rectangle(-33., -33., 33., 33.) }, rib_params(16., 8.));
+
+    std::set<coord_t> xs, ys;
+    for (const Polyline &rib : ribs) {
+        if (is_vertical(rib))
+            xs.insert(rib.first_point().x());
+        else
+            ys.insert(rib.first_point().y());
+    }
+    const std::set<coord_t> lattice { scaled<coord_t>(-16.), 0, scaled<coord_t>(16.) };
+    CHECK(xs == lattice);
+    CHECK(ys == lattice);
+}
+
 TEST_CASE("Ribs cross a narrow wall at the tie spacing and leave out the lines along it", "[Fill][RibbedLightning]")
 {
     // A tie spacing of 7 mm is rounded to 8 mm, half of the rib spacing.

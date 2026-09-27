@@ -64,6 +64,8 @@ Polylines generate_ribs(const ExPolygons &area, const RibParams &params)
     const coord_t max_tie_length = 3 * rib_spacing / 2;
     // A chord must have infill on both sides. One running along an edge of the area would be printed over the wall.
     const coord_t side_offset    = std::max(coord_t(SCALED_EPSILON), params.min_length / 4);
+    // A rib close to a wall running alongside it would only thicken that wall.
+    const coord_t rib_clearance  = rib_spacing / 4;
 
     // Work in a frame where the lattice lines are vertical (x = i * tie_spacing) and, transposed, horizontal.
     ExPolygons rotated = area;
@@ -92,6 +94,8 @@ Polylines generate_ribs(const ExPolygons &area, const RibParams &params)
             const std::vector<Interval> left       = chords_at(polygons, c - side_offset);
             const std::vector<Interval> right      = chords_at(polygons, c + side_offset);
             const std::vector<Interval> wide_parts = chords_at(wide, c);
+            const std::vector<Interval> rib_left   = is_rib ? chords_at(polygons, c - rib_clearance) : std::vector<Interval>();
+            const std::vector<Interval> rib_right  = is_rib ? chords_at(polygons, c + rib_clearance) : std::vector<Interval>();
             for (const Interval &chord : chords) {
                 const coord_t length = chord.second - chord.first;
                 const coord_t middle = chord.first + length / 2;
@@ -100,7 +104,7 @@ Polylines generate_ribs(const ExPolygons &area, const RibParams &params)
                 const coord_t in_wide = overlap(chord, wide_parts);
                 // A rib crosses a wide part and runs on to the walls on either side of it. A tie crosses
                 // a narrow part from one wall to the other.
-                const bool rib = is_rib && in_wide >= std::min(rib_spacing / 2, length / 2);
+                const bool rib = is_rib && in_wide >= std::min(rib_spacing / 2, length / 2) && contains(rib_left, middle) && contains(rib_right, middle);
                 const bool tie = in_wide <= params.min_length && length <= max_tie_length;
                 if (rib || tie)
                     ribs.emplace_back(family == 0 ? Polyline(Point(c, chord.first), Point(c, chord.second)) :
